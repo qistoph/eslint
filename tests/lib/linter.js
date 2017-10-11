@@ -20,7 +20,8 @@
 function compatRequire(name, windowName) {
     if (typeof window === "object") {
         return window[windowName || name];
-    } else if (typeof require === "function") {
+    }
+    if (typeof require === "function") {
         return require(name);
     }
     throw new Error(`Cannot find object '${name}'.`);
@@ -99,6 +100,23 @@ describe("Linter", () => {
             assert.throws(() => {
                 linter.verify(code, config, filename, true);
             }, "Intentional error.");
+        });
+
+        it("does not call rule listeners with a `this` value", () => {
+            const spy = sandbox.spy();
+
+            linter.defineRule("checker", () => ({ Program: spy }));
+            linter.verify("foo", { rules: { checker: "error" } });
+            assert(spy.calledOnce);
+            assert.strictEqual(spy.firstCall.thisValue, void 0);
+        });
+
+        it("does not allow listeners to use special EventEmitter values", () => {
+            const spy = sandbox.spy();
+
+            linter.defineRule("checker", () => ({ newListener: spy }));
+            linter.verify("foo", { rules: { checker: "error", "no-undef": "error" } });
+            assert(spy.notCalled);
         });
     });
 
@@ -1855,7 +1873,7 @@ describe("Linter", () => {
             it("should not report a violation", () => {
                 const code = [
                     "alert('test'); // eslint-disable-line no-alert",
-                    "console('test'); // eslint-disable-line no-console"
+                    "console.log('test'); // eslint-disable-line no-console"
                 ].join("\n");
                 const config = {
                     rules: {
@@ -1872,7 +1890,7 @@ describe("Linter", () => {
             it("should not report a violation", () => {
                 const code = [
                     "alert('test') // eslint-disable-line no-alert, quotes, semi",
-                    "console('test'); // eslint-disable-line"
+                    "console.log('test'); // eslint-disable-line"
                 ].join("\n");
                 const config = {
                     rules: {
@@ -2063,6 +2081,48 @@ describe("Linter", () => {
             assert.equal(messages.length, 1);
 
             assert.equal(messages[0].ruleId, "no-console");
+        });
+
+        it("should report no violation", () => {
+            const code = [
+                "/*eslint-disable no-unused-vars */",
+                "var foo; // eslint-disable-line no-unused-vars",
+                "var bar;",
+                "/* eslint-enable no-unused-vars */" // here
+            ].join("\n");
+            const config = { rules: { "no-unused-vars": 2 } };
+
+            const messages = linter.verify(code, config, filename);
+
+            assert.equal(messages.length, 0);
+        });
+
+        it("should report no violation", () => {
+            const code = [
+                "var foo1; // eslint-disable-line no-unused-vars",
+                "var foo2; // eslint-disable-line no-unused-vars",
+                "var foo3; // eslint-disable-line no-unused-vars",
+                "var foo4; // eslint-disable-line no-unused-vars",
+                "var foo5; // eslint-disable-line no-unused-vars"
+            ].join("\n");
+            const config = { rules: { "no-unused-vars": 2 } };
+
+            const messages = linter.verify(code, config, filename);
+
+            assert.equal(messages.length, 0);
+        });
+
+        it("should report no violation", () => {
+            const code = [
+                "/* eslint-disable quotes */",
+                "console.log(\"foo\");",
+                "/* eslint-enable quotes */"
+            ].join("\n");
+            const config = { rules: { quotes: 2 } };
+
+            const messages = linter.verify(code, config, filename);
+
+            assert.equal(messages.length, 0);
         });
 
         it("should report a violation", () => {
@@ -2786,6 +2846,25 @@ describe("Linter", () => {
 
             linter.verify(code, config, { allowInlineConfig: false });
             assert(ok);
+        });
+    });
+
+    describe("reportUnusedDisable option", () => {
+        it("reports problems for unused eslint-disable comments", () => {
+            assert.deepEqual(
+                linter.verify("/* eslint-disable */", {}, { reportUnusedDisableDirectives: true }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
         });
     });
 
@@ -3586,6 +3665,136 @@ describe("Linter", () => {
 
                 assert.isTrue(linter1.environments.get("mock-env"), "mock env is present");
                 assert.isNull(linter2.environments.get("mock-env"), "mock env is not present");
+            });
+        });
+    });
+
+    describe("processors", () => {
+        beforeEach(() => {
+
+            // A rule that always reports the AST with a message equal to the source text
+            linter.defineRule("report-original-text", context => ({
+                Program(ast) {
+                    context.report({ node: ast, message: context.getSourceCode().text });
+                }
+            }));
+        });
+
+        describe("preprocessors", () => {
+            it("should apply a preprocessor to the code, and lint each code sample separately", () => {
+                const code = "foo bar baz";
+                const problems = linter.verify(
+                    code,
+                    { rules: { "report-original-text": "error" } },
+                    {
+
+                        // Apply a preprocessor that splits the source text into spaces and lints each word individually
+                        preprocess(input) {
+                            assert.strictEqual(input, code);
+                            assert.strictEqual(arguments.length, 1);
+                            return input.split(" ");
+                        }
+                    }
+                );
+
+                assert.strictEqual(problems.length, 3);
+                assert.deepEqual(problems.map(problem => problem.message), ["foo", "bar", "baz"]);
+            });
+        });
+
+        describe("postprocessors", () => {
+            it("should apply a postprocessor to the reported messages", () => {
+                const code = "foo bar baz";
+
+                const problems = linter.verify(
+                    code,
+                    { rules: { "report-original-text": "error" } },
+                    {
+                        preprocess: input => input.split(" "),
+
+                        /*
+                         * Apply a postprocessor that updates the locations of the reported problems
+                         * to make sure they correspond to the locations in the original text.
+                         */
+                        postprocess(problemLists) {
+                            assert.strictEqual(problemLists.length, 3);
+                            assert.strictEqual(arguments.length, 1);
+
+                            problemLists.forEach(problemList => assert.strictEqual(problemList.length, 1));
+                            return problemLists.reduce(
+                                (combinedList, problemList, index) =>
+                                    combinedList.concat(
+                                        problemList.map(
+                                            problem =>
+                                                Object.assign(
+                                                    {},
+                                                    problem,
+                                                    {
+                                                        message: problem.message.toUpperCase(),
+                                                        column: problem.column + index * 4
+                                                    }
+                                                )
+                                        )
+                                    ),
+                                []
+                            );
+                        }
+                    }
+                );
+
+                assert.strictEqual(problems.length, 3);
+                assert.deepEqual(problems.map(problem => problem.message), ["FOO", "BAR", "BAZ"]);
+                assert.deepEqual(problems.map(problem => problem.column), [1, 5, 9]);
+            });
+
+            it("should use postprocessed problem ranges when applying autofixes", () => {
+                const code = "foo bar baz";
+
+                linter.defineRule("capitalize-identifiers", context => ({
+                    Identifier(node) {
+                        if (node.name !== node.name.toUpperCase()) {
+                            context.report({
+                                node,
+                                message: "Capitalize this identifier",
+                                fix: fixer => fixer.replaceText(node, node.name.toUpperCase())
+                            });
+                        }
+                    }
+                }));
+
+                const fixResult = linter.verifyAndFix(
+                    code,
+                    { rules: { "capitalize-identifiers": "error" } },
+                    {
+
+                        /*
+                         * Apply a postprocessor that updates the locations of autofixes
+                         * to make sure they correspond to locations in the original text.
+                         */
+                        preprocess: input => input.split(" "),
+                        postprocess(problemLists) {
+                            return problemLists.reduce(
+                                (combinedProblems, problemList, blockIndex) =>
+                                    combinedProblems.concat(
+                                        problemList.map(problem =>
+                                            Object.assign(problem, {
+                                                fix: {
+                                                    text: problem.fix.text,
+                                                    range: problem.fix.range.map(
+                                                        rangeIndex => rangeIndex + blockIndex * 4
+                                                    )
+                                                }
+                                            }))
+                                    ),
+                                []
+                            );
+                        }
+                    }
+                );
+
+                assert.strictEqual(fixResult.fixed, true);
+                assert.strictEqual(fixResult.messages.length, 0);
+                assert.strictEqual(fixResult.output, "FOO BAR BAZ");
             });
         });
     });
