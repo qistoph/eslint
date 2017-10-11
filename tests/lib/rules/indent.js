@@ -3591,6 +3591,31 @@ ruleTester.run("indent", rule, {
             `,
             options: [4, { flatTernaryExpressions: true }]
         },
+        {
+            code: unIndent`
+                function foo() {
+                    return foo ? bar :
+                        baz
+                }
+            `,
+            options: [4, { flatTernaryExpressions: true }]
+        },
+        {
+            code: unIndent`
+                throw foo ? bar :
+                    baz
+            `,
+            options: [4, { flatTernaryExpressions: true }]
+        },
+        {
+            code: unIndent`
+                foo(
+                    bar
+                ) ? baz :
+                    qux
+            `,
+            options: [4, { flatTernaryExpressions: true }]
+        },
         unIndent`
                 foo
                     [
@@ -4719,6 +4744,32 @@ ruleTester.run("indent", rule, {
                 </foo>
             `,
             options: [4, { ignoredNodes: ["JSXOpeningElement"] }]
+        },
+        {
+            code: unIndent`
+                {
+                \tvar x = 1,
+                \t    y = 2;
+                }
+            `,
+            options: ["tab"]
+        },
+        {
+            code: unIndent`
+                var x = 1,
+                    y = 2;
+                var z;
+            `,
+            options: ["tab", { ignoredNodes: ["VariableDeclarator"] }]
+        },
+        {
+            code: unIndent`
+                [
+                    foo(),
+                    bar
+                ]
+            `,
+            options: ["tab", { ArrayExpression: "first", ignoredNodes: ["CallExpression"] }]
         }
     ],
 

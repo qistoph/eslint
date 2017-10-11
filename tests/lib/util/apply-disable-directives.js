@@ -143,6 +143,34 @@ describe("apply-disable-directives", () => {
             );
         });
 
+        it("filter out problems if disable all then enable foo and then disable foo", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "enable", line: 1, column: 5, ruleId: "foo" },
+                        { type: "disable", line: 2, column: 1, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 3, column: 3, ruleId: "foo" }]
+                }),
+                []
+            );
+        });
+
+        it("filter out problems if disable all then enable foo and then disable all", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "enable", line: 1, column: 5, ruleId: "foo" },
+                        { type: "disable", line: 2, column: 1, ruleId: null }
+                    ],
+                    problems: [{ line: 3, column: 3, ruleId: "foo" }]
+                }),
+                []
+            );
+        });
+
         it("keeps problems before the eslint-enable comment if there is no corresponding disable comment", () => {
             assert.deepEqual(
                 applyDisableDirectives({
@@ -298,6 +326,23 @@ describe("apply-disable-directives", () => {
                 []
             );
         });
+
+        it("handles consecutive comments appropriately", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable-line", line: 1, column: 5, ruleId: "foo" },
+                        { type: "disable-line", line: 2, column: 5, ruleId: "foo" },
+                        { type: "disable-line", line: 3, column: 5, ruleId: "foo" },
+                        { type: "disable-line", line: 4, column: 5, ruleId: "foo" },
+                        { type: "disable-line", line: 5, column: 5, ruleId: "foo" },
+                        { type: "disable-line", line: 6, column: 5, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 2, column: 1, ruleId: "foo" }]
+                }),
+                []
+            );
+        });
     });
 
     describe("eslint-disable-next-line comments without rules", () => {
@@ -343,19 +388,6 @@ describe("apply-disable-directives", () => {
                 []
             );
         });
-
-        it("keeps problems on the next line if there is an eslint-enable comment before the problem on the next line", () => {
-            assert.deepEqual(
-                applyDisableDirectives({
-                    directives: [
-                        { type: "disable-next-line", line: 1, column: 1, ruleId: null },
-                        { type: "enable", line: 2, column: 1, ruleId: null }
-                    ],
-                    problems: [{ line: 2, column: 2, ruleId: "foo" }]
-                }),
-                [{ line: 2, column: 2, ruleId: "foo" }]
-            );
-        });
     });
 
     describe("eslint-disable-next-line comments with rules", () => {
@@ -389,6 +421,486 @@ describe("apply-disable-directives", () => {
                         problems: []
                     }),
                 "Unrecognized directive type 'foo'"
+            );
+        });
+    });
+
+    describe("unused directives", () => {
+        it("Adds a problem for /* eslint-disable */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable", line: 1, column: 5 }],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Does not add a problem for /* eslint-disable */ /* (problem) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable", line: 1, column: 5, ruleId: null }],
+                    problems: [{ line: 2, column: 1, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                []
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable foo */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable", line: 1, column: 5, ruleId: "foo" }],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable foo */ /* (problem from another rule) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable", line: 1, column: 5, ruleId: "foo" }],
+                    problems: [{ line: 1, column: 20, ruleId: "not-foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: "not-foo",
+                        line: 1,
+                        column: 20
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* (problem from foo) */ /* eslint-disable */ /* eslint-enable foo */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 5, ruleId: null },
+                        { type: "enable", line: 1, column: 6, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 1, column: 2, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: "foo",
+                        line: 1,
+                        column: 2
+                    },
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable */ /* eslint-enable */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 5, ruleId: null },
+                        { type: "enable", line: 1, column: 6, ruleId: null }
+                    ],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds two problems for /* eslint-disable */ /* eslint-disable */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable", line: 2, column: 1, ruleId: null }
+                    ],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 2,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable */ /* eslint-disable */ /* (problem) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable", line: 2, column: 1, ruleId: null }
+                    ],
+                    problems: [{ line: 3, column: 1, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable foo */ /* eslint-disable */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: "foo" },
+                        { type: "disable", line: 2, column: 1, ruleId: null }
+                    ],
+                    problems: [{ line: 3, column: 1, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Does not add a problem for /* eslint-disable foo */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable", line: 1, column: 5, ruleId: "foo" }],
+                    problems: [{ line: 1, column: 6, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                []
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable */ /* eslint-disable foo */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable", line: 2, column: 1, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 3, column: 1, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable */ /* eslint-disable foo */ /* (problem from another rule) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable", line: 2, column: 1, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 3, column: 1, ruleId: "bar" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 2,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable foo */ /* eslint-enable foo */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 5, ruleId: "foo" },
+                        { type: "enable", line: 1, column: 8, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 1, column: 10, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: "foo",
+                        line: 1,
+                        column: 10
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for /* eslint-disable foo */ /* eslint-enable */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 5, ruleId: "foo" },
+                        { type: "enable", line: 1, column: 8, ruleId: null }
+                    ],
+                    problems: [{ line: 1, column: 10, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: "foo",
+                        line: 1,
+                        column: 10
+                    }
+                ]
+            );
+        });
+
+        it("Adds two problems for /* eslint-disable */ /* eslint-disable foo */ /* eslint-enable foo */ /* (problem from foo) */", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable", line: 2, column: 1, ruleId: "foo" },
+                        { type: "enable", line: 3, column: 1, ruleId: "foo" }
+                    ],
+                    problems: [{ line: 4, column: 1, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported from 'foo').",
+                        line: 2,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: "foo",
+                        line: 4,
+                        column: 1
+                    }
+                ]
+            );
+        });
+
+        it("Adds a problem for // eslint-disable-line", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable-line", line: 1, column: 5, ruleId: null }],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+
+        it("Does not add a problem for // eslint-disable-line (problem)", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable-line", line: 1, column: 5, ruleId: null }],
+                    problems: [{ line: 1, column: 10, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                []
+            );
+        });
+
+        it("Adds a problem for // eslint-disable-next-line", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable-next-line", line: 1, column: 5, ruleId: null }],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Does not add a problem for // eslint-disable-next-line \\n (problem)", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable-next-line", line: 1, column: 5, ruleId: null }],
+                    problems: [{ line: 2, column: 10, ruleId: "foo" }],
+                    reportUnusedDisableDirectives: true
+                }),
+                []
+            );
+        });
+
+        it("adds two problems for /* eslint-disable */ // eslint-disable-line", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [
+                        { type: "disable", line: 1, column: 1, ruleId: null },
+                        { type: "disable-line", line: 1, column: 5, ruleId: null }
+                    ],
+                    problems: [],
+                    reportUnusedDisableDirectives: true
+                }),
+                [
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 1,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    },
+                    {
+                        ruleId: null,
+                        message: "Unused eslint-disable directive (no problems were reported).",
+                        line: 1,
+                        column: 5,
+                        severity: 2,
+                        source: null,
+                        nodeType: null
+                    }
+                ]
+            );
+        });
+
+        it("Does not add problems when reportUnusedDisableDirectives: false is used", () => {
+            assert.deepEqual(
+                applyDisableDirectives({
+                    directives: [{ type: "disable-next-line", line: 1, column: 5, ruleId: null }],
+                    problems: [],
+                    reportUnusedDisableDirectives: false
+                }),
+                []
             );
         });
     });
